@@ -1,0 +1,66 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "expenseflow-expense"
+        IMAGE_TAG  = "latest"
+        DOCKERHUB_USER = "334yash"
+        NAMESPACE  = "prod"
+        HELM_CHART_PATH = "./k8s-charts/expenseflow"
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/334yash/expensflow-pro.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                docker build -t \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG .
+                kind load docker-image \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG --name expenseflow
+                """
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                    echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                    docker push \$DOCKER_USER/\$IMAGE_NAME:\$IMAGE_TAG
+                    """
+                }
+            }
+        }
+
+        stage('Helm Deploy') {
+            steps {
+                sh """
+                helm upgrade --install expenseflow \$HELM_CHART_PATH --namespace \$NAMESPACE --create-namespace
+                """
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh "kubectl get pods -n \$NAMESPACE"
+                sh "kubectl get svc -n \$NAMESPACE"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'CI/CD Pipeline executed successfully! 🚀'
+        }
+        failure {
+            echo 'Pipeline failed 😢'
+        }
+    }
+}
+
+             
