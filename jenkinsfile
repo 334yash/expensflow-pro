@@ -1,70 +1,55 @@
 pipeline {
-    agent any
-
-    environment {
-        DOCKER_HUB_USER = '334yash'
-        IMAGE_NAME = 'expenseflow-expense'
-        DOCKER_CREDENTIALS = credentials('dockerhub-cred')
-        KUBECONFIG_FILE = credentials('kubeconfig')
+  agent any
+  environment {
+    IMAGE_NAME = "expenseflow-expense"
+    IMAGE_TAG  = "latest"
+    DOCKERHUB_USER = "334yash"
+    NAMESPACE  = "prod"
+    HELM_CHART_PATH = "./k8s-charts/expenseflow"
+  }
+  stages {
+    stage('Checkout Code') {
+      steps { git branch: 'main', url: 'https://github.com/334yash/expensflow-pro.git' }
     }
-
-    stages {
-        stage('Checkout Code') {
-            steps {
-                git branch: 'main', url: 'https://github.com/334yash/expensflow-pro.git'
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build -t $DOCKER_HUB_USER/$IMAGE_NAME:latest ./services/expense-service'
-                sh 'kind load docker-image $DOCKER_HUB_USER/$IMAGE_NAME:latest --name expenseflow || true'
-            }
-        }
-
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker push $DOCKER_USER/$IMAGE_NAME:latest
-                    '''
-                }
-            }
-        }
-
-        stage('Helm Deploy') {
-            steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
-                    sh '''
-                        export KUBECONFIG=$KUBECONFIG_FILE
-                        echo "KUBECONFIG in use: $KUBECONFIG"
-                        kubectl get nodes -o wide
-                        helm upgrade --install expenseflow ./k8s-charts/expenseflow --namespace prod --create-namespace
-                    '''
-                }
-            }
-        }
-
-        stage('Verify Deployment') {
-            steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
-                    sh '''
-                        export KUBECONFIG=$KUBECONFIG_FILE
-                        echo "Verifying Deployment..."
-                        kubectl get pods -n prod
-                    '''
-                }
-            }
-        }
+    stage('Build Docker Image') {
+      steps {
+        sh """
+        docker build -t ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ./services/expense-service
+        kind load docker-image ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} --name expenseflow || true
+        """
+      }
     }
-
-    post {
-        success {
-            echo 'Pipeline completed successfully ✅'
+    stage('Push to Docker Hub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh """
+            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+            docker push \$DOCKER_USER/${IMAGE_NAME}:${IMAGE_TAG}
+          """
         }
-        failure {
-            echo 'Pipeline failed 😢'
-        }
+      }
     }
+    stage('Helm Deploy') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig-cred', variable: 'KUBECONFIG_FILE')]) {
+          sh '''
+            export KUBECONFIG=${KUBECONFIG_FILE}
+            echo "KUBECONFIG in use: ${KUBECONFIG}"
+            kubectl get nodes -o wide
+            helm upgrade --install expenseflow ${HELM_CHART_PATH} --namespace ${NAMESPACE} --create-namespace
+          '''
+        }
+      }
+    }
+    stage('Verify Deployment') {
+      steps {
+        sh "kubectl get pods -n ${NAMESPACE}"
+        sh "kubectl get svc -n ${NAMESPACE}"
+      }
+    }
+  }
+  post {
+    success { echo 'CI/CD Pipeline executed successfully! 🚀' }
+    failure { echo 'Pipeline failed 😢' }
+  }
 }
