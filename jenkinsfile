@@ -18,13 +18,15 @@ pipeline {
         }
 
         stage('Build Docker Image') {
-            steps {
-                sh """
-                docker build -t \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG .
-                kind load docker-image \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG --name expenseflow
-                """
-            }
-        }
+    steps {
+        sh """
+        docker build -t \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG ./services/expense-service
+        kind load docker-image \$DOCKERHUB_USER/\$IMAGE_NAME:\$IMAGE_TAG --name expenseflow
+        """
+    }
+}
+
+   
 
         stage('Push to Docker Hub') {
             steps {
