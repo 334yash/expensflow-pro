@@ -6,22 +6,33 @@ pipeline {
     DOCKERHUB_USER = "334yash"
     NAMESPACE  = "prod"
     HELM_CHART_PATH = "./k8s-charts/expenseflow"
+    // Permanent KUBECONFIG setting
+    KUBECONFIG = "/var/lib/jenkins/.kube/config"
   }
+  
   stages {
     stage('Checkout Code') {
-      steps { git branch: 'main', url: 'https://github.com/334yash/expensflow-pro.git' }
+      steps { 
+        git branch: 'main', url: 'https://github.com/334yash/expensflow-pro.git' 
+      }
     }
+    
     stage('Build Docker Image') {
       steps {
         sh """
-        docker build -t ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ./services/expense-service
-        kind load docker-image ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} --name expenseflow || true
+          docker build -t ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} ./services/expense-service
+          kind load docker-image ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG} --name expenseflow || true
         """
       }
     }
+    
     stage('Push to Docker Hub') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-cred', 
+          usernameVariable: 'DOCKER_USER', 
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
           sh """
             echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
             docker push \$DOCKER_USER/${IMAGE_NAME}:${IMAGE_TAG}
@@ -29,27 +40,74 @@ pipeline {
         }
       }
     }
+    
     stage('Helm Deploy') {
       steps {
-        withCredentials([file(credentialsId: 'kubeconfig-cred', variable: 'KUBECONFIG_FILE')]) {
-          sh '''
-            export KUBECONFIG=${KUBECONFIG_FILE}
-            echo "KUBECONFIG in use: ${KUBECONFIG}"
-            kubectl get nodes -o wide
-            helm upgrade --install expenseflow ${HELM_CHART_PATH} --namespace ${NAMESPACE} --create-namespace
-          '''
+        sh """
+          # Permanent kubeconfig use karein
+          echo "Using permanent KUBECONFIG: ${KUBECONFIG}"
+          kubectl get nodes -o wide
+          helm upgrade --install expenseflow ${HELM_CHART_PATH} --namespace ${NAMESPACE} --create-namespace --atomic --timeout 10m
+        """
+      }
+    }
+    
+    stage('Verify Deployment') {
+      steps {
+        script {
+          // Wait for pods to be ready
+          sleep 30
+          
+          sh """
+            # Cluster info check
+            echo "=== Cluster Information ==="
+            kubectl cluster-info
+            
+            echo "=== Pods Status ==="
+            kubectl get pods -n ${NAMESPACE} -o wide
+            
+            echo "=== Services Status ==="
+            kubectl get svc -n ${NAMESPACE}
+            
+            echo "=== Deployments Status ==="
+            kubectl get deployments -n ${NAMESPACE}
+            
+            echo "=== Helm Status ==="
+            helm list -n ${NAMESPACE}
+          """
+          
+          // Additional verification
+          sh """
+            # Check if all pods are running
+            kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=expenseflow -n ${NAMESPACE} --timeout=300s
+          """
         }
       }
     }
-    stage('Verify Deployment') {
-      steps {
-        sh "kubectl get pods -n ${NAMESPACE}"
-        sh "kubectl get svc -n ${NAMESPACE}"
-      }
-    }
   }
+  
   post {
-    success { echo 'CI/CD Pipeline executed successfully! 🚀' }
-    failure { echo 'Pipeline failed 😢' }
+    always {
+      echo "=== Pipeline Execution Complete ==="
+      sh """
+        echo "Final status check:"
+        kubectl get all -n ${NAMESPACE} || true
+      """
+    }
+    success { 
+      echo 'CI/CD Pipeline executed successfully! 🚀' 
+      sh """
+        echo "✅ Deployment Successful!"
+        kubectl get pods -n ${NAMESPACE} | grep Running
+      """
+    }
+    failure { 
+      echo 'Pipeline failed 😢' 
+      sh """
+        echo "❌ Debug Information:"
+        kubectl describe pods -n ${NAMESPACE} || true
+        kubectl get events -n ${NAMESPACE} || true
+      """
+    }
   }
 }
